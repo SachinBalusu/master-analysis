@@ -1,0 +1,104 @@
+Step 2 — Hook it to your Google Sheet (one button)
+
+In your sheet (the one from your screenshots):
+	1.	Extensions → Apps Script → paste this → Save.
+	2.	Back in the sheet, reload → KES menu will appear.
+
+const RUN_URL = "http://localhost:8080/scan";   // change to Cloud Run URL later
+const SHEET_NAME = "Sheet1";                    // set to your tab name
+const TICKER_COL_LETTER = "A";                  // column with your tickers
+const POINTS_HEADER = "Points";                 // must match your header
+const COMPONENTS_HEADER = "KES Components";     // new column we add
+
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu("KES")
+    .addItem("Update Scores", "kesUpdateScores")
+    .addToUi();
+}
+
+function kesUpdateScores() {
+  const sh = SpreadsheetApp.getActive().getSheetByName(SHEET_NAME);
+  const lastRow = sh.getLastRow();
+  if (lastRow < 2) return;
+
+  const tickers = sh.getRange(2, colIndex(TICKER_COL_LETTER), lastRow-1, 1)
+                   .getValues().flat()
+                   .map(String).map(s => s.trim().toUpperCase())
+                   .filter(Boolean);
+
+  const url = RUN_URL + "?threshold=0&tickers=" + encodeURIComponent(tickers.join(","));
+  const res = UrlFetchApp.fetch(url, {muteHttpExceptions:true});
+  const json = JSON.parse(res.getContentText());
+  const hits = json.hits || [];
+  const map = {}; hits.forEach(h => map[h.ticker] = h);
+
+  const pointsCol = ensureHeader(sh, POINTS_HEADER);
+  const compsCol  = ensureHeader(sh, COMPONENTS_HEADER);
+
+  const outPoints = [], outComps = [];
+  for (let r = 2; r <= lastRow; r++) {
+    const t = String(sh.getRange(r, colIndex(TICKER_COL_LETTER)).getValue()).trim().toUpperCase();
+    const h = map[t];
+    outPoints.push([h ? h.score : ""]);
+    const tags = h ? Object.entries(h.components).filter(([k,v]) => v).map(([k]) => k).join(", ") : "";
+    outComps.push([tags]);
+  }
+  sh.getRange(2, pointsCol, outPoints.length, 1).setValues(outPoints);
+  sh.getRange(2, compsCol,  outComps.length,  1).setValues(outComps);
+}
+
+function ensureHeader(sh, headerText) {
+  const headers = sh.getRange(1,1,1, sh.getLastColumn()).getValues()[0].map(x => String(x).trim());
+  let idx = headers.findIndex(h => h.toLowerCase() === headerText.toLowerCase());
+  if (idx >= 0) return idx + 1;
+  const newCol = sh.getLastColumn() + 1;
+  sh.getRange(1, newCol).setValue(headerText);
+  return newCol;
+}
+
+function colIndex(letter) {
+  return letter.toUpperCase().split("").reduce((n, c) => n*26 + c.charCodeAt(0)-64, 0);
+}
+
+
+Now click KES → Update Scores → your Points column fills with the scanner’s score and a KES Components column shows which signals fired (mkt:2/2, weekBiasUp, nearW200, …).
+
+(Optional) Auto-run daily: in Apps Script → Triggers → add for kesUpdateScores, schedule weekdays ~3:10 PM CT.
+
+⸻
+
+Step 3 — Feed your 300 tickers
+
+You already have them in the sheet, so you’re done.
+If you ever want to drive from a Google Sheet CSV instead (no Apps Script), publish a sheet with a ticker column and set env:
+
+SHEET_CSV=https://docs.google.com/.../pub?output=csv
+
+Step 5 — (Optional) Deploy to Cloud Run (has Dockerfile)
+
+From the kes-scanner folder:
+gcloud builds submit --tag gcr.io/PROJECT_ID/kes-scan:v1
+gcloud run deploy kes-scan \
+  --image gcr.io/PROJECT_ID/kes-scan:v1 \
+  --platform managed --region us-central1 --allow-unauthenticated \
+  --set-env-vars "DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/xxx,THRESHOLD=9.5"
+
+Your endpoint will be:
+  https://<cloud-run-url>/scan?threshold=0&tickers=AAPL,MSFT,...
+
+  Update the RUN_URL in your Apps Script to that URL and you’re cloud-native.
+
+Your Terraform currently targets GKE. If you prefer Cloud Run, keep your provider region as us-central1 (that’s a region; us-central1-f is a zone). We can add Cloud Run + Scheduler Terraform later; for speed, the CLI above is perfect.
+
+⸻
+
+Step 6 — Use it with your sheet workflow
+	1.	Click KES → Update Scores (or let the trigger run).
+	2.	Filter rows where Points ≥ 9.5.
+	3.	In “KES Components” look for mkt:2/2 + reversalVol + dailyTrendShift — those are your A+ entries.
+	4.	Enter per your playbook (TP + runners, structure invalidation).
+
+⸻
+
+If you want, I can add a second sheet button to highlight A-setups (rows with Points ≥ 9.5 and mkt:2/2) so they pop instantly.

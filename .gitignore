@@ -1,0 +1,26 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+**/.env
+.ipynb_checkpoints/
+.pytest_cache/
+.coverage
+build/
+dist/
+
+# VS Code / IDE
+.vscode/
+.idea/
+
+# Node
+node_modules/
+
+# Terraform
+.terraform/
