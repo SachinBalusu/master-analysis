@@ -71,6 +71,21 @@ jobs:
         DB_USER: ${{ secrets.DB_USER }}
         DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
 
+    - name: Generate HTML report
+      if: always()
+      working-directory: master-analysis/kes-scanner
+      run: |
+        python backtesting/scripts/generate_html_report.py backtesting/results backtest_report.html
+        mv backtesting/results/backtest_report.html backtest_report.html
+
+    - name: Upload HTML report
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: backtest-html-report-${{ github.run_number }}
+        path: master-analysis/kes-scanner/backtest_report.html
+        retention-days: 90
+
     - name: Upload results
       uses: actions/upload-artifact@v4
       if: always()
@@ -82,23 +97,122 @@ jobs:
           master-analysis/kes-scanner/logs/*.log
         retention-days: 90
 
-    - name: Generate summary
+    - name: Generate visual summary
       if: always()
       working-directory: master-analysis/kes-scanner
       run: |
-        echo "## Backtest Results" >> $GITHUB_STEP_SUMMARY
+        echo "# 📊 Backtest Results" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "**Config File:** \`${{ inputs.config_file }}\`" >> $GITHUB_STEP_SUMMARY
         echo "**Python Version:** ${{ inputs.python_version }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Run Number:** #${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Date:** $(date +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         
+        # Display comparison report as markdown table
         if [ -f backtesting/results/comparison_report.csv ]; then
-          echo "### Comparison Report" >> $GITHUB_STEP_SUMMARY
+          echo "## 📈 Performance Comparison" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          cat backtesting/results/comparison_report.csv >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          
+          # Convert CSV to markdown table
+          python3 << 'EOF' >> $GITHUB_STEP_SUMMARY
+        import csv
+        import sys
+        
+        try:
+            with open('backtesting/results/comparison_report.csv', 'r') as f:
+                reader = csv.reader(f)
+                rows = list(reader)
+                
+                if len(rows) > 0:
+                    # Header
+                    print('| ' + ' | '.join(rows[0]) + ' |')
+                    print('|' + '|'.join(['---' for _ in rows[0]]) + '|')
+                    
+                    # Data rows
+                    for row in rows[1:]:
+                        print('| ' + ' | '.join(row) + ' |')
+        except Exception as e:
+            print(f"Error reading CSV: {e}")
+        EOF
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        # List all generated charts
+        echo "## 🎨 Generated Charts" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        CHART_COUNT=$(ls -1 backtesting/results/*.png 2>/dev/null | wc -l)
+        if [ $CHART_COUNT -gt 0 ]; then
+          echo "✅ Generated $CHART_COUNT chart(s)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          for chart in backtesting/results/*.png; do
+            if [ -f "$chart" ]; then
+              CHART_NAME=$(basename "$chart" .png)
+              echo "- 📊 **$CHART_NAME**" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> � **Note:** Download the artifacts below to view the actual chart images" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "⚠️ No charts generated" >> $GITHUB_STEP_SUMMARY
         fi
         
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "📊 Download artifacts to view detailed results and charts" >> $GITHUB_STEP_SUMMARY
+        
+        # Add trade statistics if available
+        if [ -f backtesting/results/comparison_report.csv ]; then
+          echo "## � Key Metrics" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Extract and display best performing scenario
+          python3 << 'EOF' >> $GITHUB_STEP_SUMMARY
+        import csv
+        
+        try:
+            with open('backtesting/results/comparison_report.csv', 'r') as f:
+                reader = csv.DictReader(f)
+                rows = list(reader)
+                
+                if len(rows) > 0:
+                    # Find best return
+                    best_return = max(rows, key=lambda x: float(x.get('Total Return (%)', 0)))
+                    # Find best win rate
+                    best_win_rate = max(rows, key=lambda x: float(x.get('Win Rate (%)', 0)))
+                    # Find best Sharpe
+                    best_sharpe = max(rows, key=lambda x: float(x.get('Sharpe Ratio', 0)))
+                    
+                    print(f"### 🏆 Best Performers")
+                    print("")
+                    print(f"- **Highest Return:** {best_return.get('Scenario', 'N/A')} ({best_return.get('Total Return (%)', 'N/A')}%)")
+                    print(f"- **Highest Win Rate:** {best_win_rate.get('Scenario', 'N/A')} ({best_win_rate.get('Win Rate (%)', 'N/A')}%)")
+                    print(f"- **Best Risk-Adjusted:** {best_sharpe.get('Scenario', 'N/A')} (Sharpe: {best_sharpe.get('Sharpe Ratio', 'N/A')})")
+                    print("")
+        except Exception as e:
+            print(f"Could not analyze metrics: {e}")
+        EOF
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "## �📦 Download Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 🌐 HTML Report (Recommended)" >> $GITHUB_STEP_SUMMARY
+        echo "Download **backtest-html-report-${{ github.run_number }}** for:" >> $GITHUB_STEP_SUMMARY
+        echo "- 📊 Interactive HTML report with embedded charts" >> $GITHUB_STEP_SUMMARY
+        echo "- 🎨 All visualizations in one beautiful page" >> $GITHUB_STEP_SUMMARY
+        echo "- 📱 Mobile-friendly responsive design" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 📁 Raw Data" >> $GITHUB_STEP_SUMMARY
+        echo "Download **backtest-results-${{ github.run_number }}** for:" >> $GITHUB_STEP_SUMMARY
+        echo "- 📄 CSV files with trade-by-trade data" >> $GITHUB_STEP_SUMMARY
+        echo "- 🖼️ PNG charts (4-panel visualizations)" >> $GITHUB_STEP_SUMMARY
+        echo "- 📝 Log files for debugging" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Retention:** 90 days" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "---" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "💡 **Pro Tip:** Open the HTML report in your browser to see all charts and data in one place!" >> $GITHUB_STEP_SUMMARY
