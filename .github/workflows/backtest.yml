@@ -1,0 +1,104 @@
+name: Run Backtest
+
+on:
+  workflow_dispatch:
+    inputs:
+      config_file:
+        description: 'Config file path (relative to repo root)'
+        required: true
+        default: 'master-analysis/kes-scanner/backtesting/configs/quick_test.json'
+        type: choice
+        options:
+          - master-analysis/kes-scanner/backtesting/configs/quick_test.json
+          - master-analysis/kes-scanner/backtesting/configs/all_strategies.json
+          - master-analysis/kes-scanner/backtesting/configs/averaging_down.json
+      python_version:
+        description: 'Python version'
+        required: false
+        default: '3.11'
+        type: string
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python_version }}
+        cache: 'pip'
+
+    - name: Install dependencies
+      working-directory: master-analysis/kes-scanner
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Set up Cloud SQL Proxy
+      run: |
+        curl -o cloud-sql-proxy https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.8.0/cloud-sql-proxy.linux.amd64
+        chmod +x cloud-sql-proxy
+        ./cloud-sql-proxy --port 5432 ${{ secrets.CLOUD_SQL_INSTANCE }} &
+        sleep 5
+
+    - name: Wait for database connection
+      run: |
+        for i in {1..30}; do
+          if pg_isready -h localhost -p 5432 -U ${{ secrets.DB_USER }}; then
+            echo "Database is ready"
+            exit 0
+          fi
+          echo "Waiting for database... ($i/30)"
+          sleep 2
+        done
+        echo "Database connection timeout"
+        exit 1
+      env:
+        PGPASSWORD: ${{ secrets.DB_PASSWORD }}
+
+    - name: Run backtest
+      working-directory: master-analysis/kes-scanner
+      run: |
+        python backtesting/scripts/run_backtest.py ../../${{ inputs.config_file }}
+      env:
+        DB_HOST: localhost
+        DB_PORT: 5432
+        DB_NAME: ${{ secrets.DB_NAME }}
+        DB_USER: ${{ secrets.DB_USER }}
+        DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+
+    - name: Upload results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: backtest-results-${{ github.run_number }}
+        path: |
+          master-analysis/kes-scanner/backtesting/results/*.csv
+          master-analysis/kes-scanner/backtesting/results/*.png
+          master-analysis/kes-scanner/logs/*.log
+        retention-days: 90
+
+    - name: Generate summary
+      if: always()
+      working-directory: master-analysis/kes-scanner
+      run: |
+        echo "## Backtest Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Config File:** \`${{ inputs.config_file }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "**Python Version:** ${{ inputs.python_version }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        if [ -f backtesting/results/comparison_report.csv ]; then
+          echo "### Comparison Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          cat backtesting/results/comparison_report.csv >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "📊 Download artifacts to view detailed results and charts" >> $GITHUB_STEP_SUMMARY
