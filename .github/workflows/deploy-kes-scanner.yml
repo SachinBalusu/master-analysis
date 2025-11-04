@@ -1,0 +1,112 @@
+name: 🚀 Deploy KES Scanner
+
+on:
+  workflow_dispatch:  # Manual trigger
+  push:
+    branches:
+      - main
+    paths:
+      - 'master-analysis/kes-scanner/**'
+      - '.github/workflows/deploy-kes-scanner.yml'
+
+env:
+  GCP_PROJECT_ID: kes-scanner-prod
+  GCP_REGION: us-central1
+  SERVICE_NAME: kes-scanner
+  REPOSITORY: kes-scanner
+  IMAGE_NAME: scanner
+
+jobs:
+  build-and-deploy:
+    name: Build & Deploy to Cloud Run
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔐 Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: ☁️ Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: 🔧 Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev
+
+      - name: 🏷️ Generate image tag
+        id: image
+        run: |
+          SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
+          IMAGE_TAG="${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:${SHORT_SHA}"
+          IMAGE_LATEST="${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:latest"
+          echo "tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+          echo "latest=${IMAGE_LATEST}" >> $GITHUB_OUTPUT
+          echo "sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
+
+      - name: 🐳 Build Docker image
+        working-directory: master-analysis/kes-scanner
+        run: |
+          docker build \
+            --tag ${{ steps.image.outputs.tag }} \
+            --tag ${{ steps.image.outputs.latest }} \
+            --build-arg BUILDKIT_INLINE_CACHE=1 \
+            .
+
+      - name: 📤 Push to Artifact Registry
+        run: |
+          docker push ${{ steps.image.outputs.tag }}
+          docker push ${{ steps.image.outputs.latest }}
+
+      - name: 🚀 Deploy to Cloud Run
+        id: deploy
+        run: |
+          gcloud run deploy ${{ env.SERVICE_NAME }} \
+            --image ${{ steps.image.outputs.tag }} \
+            --region ${{ env.GCP_REGION }} \
+            --platform managed \
+            --allow-unauthenticated \
+            --quiet
+
+      - name: 🔍 Get Service URL
+        id: url
+        run: |
+          SERVICE_URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} \
+            --region ${{ env.GCP_REGION }} \
+            --format 'value(status.url)')
+          echo "service_url=${SERVICE_URL}" >> $GITHUB_OUTPUT
+
+      - name: 🏥 Health Check
+        run: |
+          sleep 10
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" ${{ steps.url.outputs.service_url }}/health)
+          if [ "$HTTP_CODE" -eq 200 ]; then
+            echo "✅ Health check passed!"
+          else
+            echo "❌ Health check failed: HTTP $HTTP_CODE"
+            exit 1
+          fi
+
+      - name: 🧪 Test Dashboard
+        run: |
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" ${{ steps.url.outputs.service_url }}/dashboard)
+          if [ "$HTTP_CODE" -eq 200 ]; then
+            echo "✅ Dashboard accessible!"
+          else
+            echo "⚠️ Dashboard returned HTTP $HTTP_CODE"
+          fi
+
+      - name: 📊 Summary
+        run: |
+          echo "## 🎉 Deployment Successful!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Dashboard**: ${{ steps.url.outputs.service_url }}/dashboard" >> $GITHUB_STEP_SUMMARY
+          echo "- **API Health**: ${{ steps.url.outputs.service_url }}/health" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image**: \`${{ steps.image.outputs.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit**: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
