@@ -1,0 +1,4 @@
+2025/11/01 16:50:15 Authorizing with Application Default Credentials
+2025/11/01 16:50:15 [kes-scanner-prod:us-central1:kes-scanner-db] could not listen to address 127.0.0.1:5432: listen tcp 127.0.0.1:5432: bind: address already in use
+2025/11/01 16:50:15 Error starting proxy: [kes-scanner-prod:us-central1:kes-scanner-db] Unable to mount socket: listen tcp 127.0.0.1:5432: bind: address already in use
+2025/11/01 16:50:15 The proxy has encountered a terminal error: unable to start: [kes-scanner-prod:us-central1:kes-scanner-db] Unable to mount socket: listen tcp 127.0.0.1:5432: bind: address already in use
